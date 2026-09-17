@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
 
 permissions:
+  contents: write
   issues: write
-  contents: read
 
 jobs:
   run-search:
@@ -29,6 +29,14 @@ jobs:
 
       - name: Run Exoplanet Search Bot
         run: python bot.py
+
+      - name: Commit Generated Plot to Repository
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add candidates/candidate_transit.png
+          git commit -m "Automated update: Save candidate transit plot" || echo "No changes to commit"
+          git push
 
       - name: Create GitHub Issue Report
         env:
