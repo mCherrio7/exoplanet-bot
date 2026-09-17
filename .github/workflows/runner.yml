@@ -27,15 +27,16 @@ jobs:
         run: python bot.py
 
       - name: Send Email with Candidate Report
-        uses: dawidd6/action-send-mail@v3
+        uses: dawidd6/action-send-mail@v4
         with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          secure: true
+          server_address: smtp.office365.com
+          server_port: 587
+          secure: false
+          require_tls: true
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "Exoplanet Bot Report: New Candidate Found!"
+          subject: "Exoplanet Bot Report: Candidate Found!"
           to: ${{ secrets.EMAIL_USERNAME }}
-          from: "Exoplanet Bot"
+          from: ${{ secrets.EMAIL_USERNAME }}
           body: file://candidates/report.txt
           attachments: candidates/candidate_transit.png
