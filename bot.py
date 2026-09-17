@@ -5,7 +5,6 @@ import os
 
 os.makedirs("candidates", exist_ok=True)
 
-# Using TIC ID directly is more reliable on MAST archives
 target_star = "TIC 100100827"
 print(f"Downloading data for {target_star}...")
 
@@ -13,34 +12,37 @@ try:
     search_results = lk.search_lightcurve(target_star, mission="TESS")
     
     if len(search_results) > 0:
-        # Download first sector available
         lc = search_results[0].download(quality_bitmask="hardest").remove_nans().flatten()
         
-        # Run Box-fitting Least Squares search
+        # Run BLS search
         periodogram = lc.to_periodogram(method="bls", period=np.linspace(0.5, 5, 5000))
         best_period = float(periodogram.period_at_max_power.value)
         best_transit_time = float(periodogram.transit_time_at_max_power.value)
         
         folded = lc.fold(period=best_period, epoch_time=best_transit_time)
         
-        # Save transit plot
+        # Save transit plot inside repository directory
         fig, ax = plt.subplots(figsize=(8, 4))
         folded.scatter(ax=ax, s=2)
         ax.set_title(f"Target: {target_star} - Period: {best_period:.4f} days")
         plt.savefig("candidates/candidate_transit.png")
         plt.close()
         
-        # Write report summary
+        # Format Issue body with relative image link
         report_text = f"""## 🪐 Exoplanet Transit Candidate Flagged!
 
 **Target Star:** {target_star} (WASP-18 b)
 **Calculated Orbital Period:** {best_period:.4f} days
 **Epoch Time (T0):** {best_transit_time:.4f}
 
-### Candidate Summary:
+### Transit Light Curve Plot:
+![Candidate Transit Plot](./candidates/candidate_transit.png)
+
+---
+### Submission Summary:
 - Data retrieved automatically from TESS archives.
 - High-precision quality filtering applied to clean instrumental noise.
-- Transit candidate graph successfully generated and saved to repository artifacts.
+- Candidate plot saved directly to repository.
 """
     else:
         report_text = f"## ⚠️ Scan Complete\nNo light curve data returned for {target_star}."
@@ -51,4 +53,4 @@ except Exception as e:
 with open("candidates/report.txt", "w") as f:
     f.write(report_text)
 
-print("Script execution complete. Saved report.")
+print("Script execution complete. Saved report and image reference.")
