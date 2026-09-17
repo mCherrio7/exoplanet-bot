@@ -26,8 +26,16 @@ jobs:
       - name: Run Exoplanet Search Bot
         run: python bot.py
 
-      - name: Upload Candidate Reports
-        uses: actions/upload-artifact@v4
+      - name: Send Email with Candidate Report
+        uses: dawidd6/action-send-mail@v3
         with:
-          name: exoplanet-candidates
-          path: candidates/
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "Exoplanet Bot Report: New Candidate Found!"
+          to: ${{ secrets.EMAIL_USERNAME }}
+          from: "Exoplanet Bot"
+          body: file://candidates/report.txt
+          attachments: candidates/candidate_transit.png
