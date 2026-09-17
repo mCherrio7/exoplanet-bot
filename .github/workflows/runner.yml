@@ -30,9 +30,10 @@ jobs:
       - name: Run Exoplanet Search Bot
         run: python bot.py
 
-      - name: Post Candidate to GitHub Issues
-        uses: peter-evans/create-issue-from-file@v5
-        with:
-          title: "New Exoplanet Candidate Flagged"
-          content-filepath: ./candidates/report.txt
-          labels: exoplanet-candidate
+      - name: Create GitHub Issue Report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "New Exoplanet Candidate Flagged" \
+            --body-file ./candidates/report.txt
