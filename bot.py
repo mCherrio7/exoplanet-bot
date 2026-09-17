@@ -28,8 +28,11 @@ try:
         plt.savefig("candidates/candidate_transit.png")
         plt.close()
         
-        # REPLACE 'YOUR_GITHUB_USERNAME' and 'YOUR_REPO_NAME' BELOW:
-        raw_image_url = "https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/YOUR_REPO_NAME/main/candidates/candidate_transit.png"
+        # Automatically pull exact repository name and branch name from runner environment
+        repo = os.getenv("GITHUB_REPOSITORY", "YOUR_USERNAME/YOUR_REPO")
+        branch = os.getenv("GITHUB_REF_NAME", "main")
+        
+        raw_image_url = f"https://raw.githubusercontent.com/{repo}/{branch}/candidates/candidate_transit.png"
         
         report_text = f"""## 🪐 Exoplanet Transit Candidate Flagged!
 
@@ -55,4 +58,4 @@ except Exception as e:
 with open("candidates/report.txt", "w") as f:
     f.write(report_text)
 
-print("Script execution complete. Saved report with direct raw image link.")
+print("Script execution complete. Generated dynamic raw image link.")
