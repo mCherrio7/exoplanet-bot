@@ -5,6 +5,10 @@ on:
     - cron: '40 20 * * 3'
   workflow_dispatch:
 
+permissions:
+  issues: write
+  contents: read
+
 jobs:
   run-search:
     runs-on: ubuntu-latest
@@ -26,17 +30,9 @@ jobs:
       - name: Run Exoplanet Search Bot
         run: python bot.py
 
-      - name: Send Email with Candidate Report
-        uses: dawidd6/action-send-mail@v4
+      - name: Post Candidate to GitHub Issues
+        uses: peter-evans/create-issue-from-file@v5
         with:
-          server_address: smtp.office365.com
-          server_port: 587
-          secure: false
-          require_tls: true
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "Exoplanet Bot Report: Candidate Found!"
-          to: ${{ secrets.EMAIL_USERNAME }}
-          from: ${{ secrets.EMAIL_USERNAME }}
-          body: file://candidates/report.txt
-          attachments: candidates/candidate_transit.png
+          title: "New Exoplanet Candidate Flagged"
+          content-filepath: ./candidates/report.txt
+          labels: exoplanet-candidate
