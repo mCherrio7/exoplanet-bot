@@ -14,21 +14,23 @@ try:
     if len(search_results) > 0:
         lc = search_results[0].download(quality_bitmask="hardest").remove_nans().flatten()
         
-        # Run BLS search
+        # Run BLS transit search
         periodogram = lc.to_periodogram(method="bls", period=np.linspace(0.5, 5, 5000))
         best_period = float(periodogram.period_at_max_power.value)
         best_transit_time = float(periodogram.transit_time_at_max_power.value)
         
         folded = lc.fold(period=best_period, epoch_time=best_transit_time)
         
-        # Save transit plot inside repository directory
+        # Save graph
         fig, ax = plt.subplots(figsize=(8, 4))
         folded.scatter(ax=ax, s=2)
         ax.set_title(f"Target: {target_star} - Period: {best_period:.4f} days")
         plt.savefig("candidates/candidate_transit.png")
         plt.close()
         
-        # Format Issue body with relative image link
+        # REPLACE 'YOUR_GITHUB_USERNAME' and 'YOUR_REPO_NAME' BELOW:
+        raw_image_url = "https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/YOUR_REPO_NAME/main/candidates/candidate_transit.png"
+        
         report_text = f"""## 🪐 Exoplanet Transit Candidate Flagged!
 
 **Target Star:** {target_star} (WASP-18 b)
@@ -36,7 +38,7 @@ try:
 **Epoch Time (T0):** {best_transit_time:.4f}
 
 ### Transit Light Curve Plot:
-![Candidate Transit Plot](./candidates/candidate_transit.png)
+![Candidate Transit Plot]({raw_image_url})
 
 ---
 ### Submission Summary:
@@ -53,4 +55,4 @@ except Exception as e:
 with open("candidates/report.txt", "w") as f:
     f.write(report_text)
 
-print("Script execution complete. Saved report and image reference.")
+print("Script execution complete. Saved report with direct raw image link.")
