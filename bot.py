@@ -12,9 +12,11 @@ os.makedirs("candidates", exist_ok=True)
 history_file = "scanned_targets.txt"
 report_file = "candidates/report.txt"
 
+# Clean up leftover report file
 if os.path.exists(report_file):
     os.remove(report_file)
 
+# Load historical scan log
 if os.path.exists(history_file):
     with open(history_file, "r") as f:
         scanned = set(line.strip() for line in f.readlines())
@@ -22,50 +24,56 @@ else:
     scanned = set()
 
 def fetch_target_batch(batch_size):
-    print("Querying MAST catalog for upcoming target batch...")
-    catalog_data = Catalogs.query_criteria(
-        catalog="TIC",
-        Tmag=[8.0, 11.5],
-        objType="STAR"
-    )
-    
-    tic_ids = [f"TIC {row['ID']}" for row in catalog_data]
-    unscanned = [t for t in tic_ids if t not in scanned]
-    random.shuffle(unscanned)
-    return unscanned[:batch_size]
+    print("Querying MAST catalog for TESS targets...")
+    try:
+        catalog_data = Catalogs.query_criteria(
+            catalog="TIC",
+            Tmag=[8.0, 11.5],
+            objType="STAR"
+        )
+        tic_ids = [f"TIC {row['ID']}" for row in catalog_data]
+        unscanned = [t for t in tic_ids if t not in scanned]
+        random.shuffle(unscanned)
+        return unscanned[:batch_size]
+    except Exception as e:
+        print(f"Error querying MAST: {e}")
+        return []
 
 targets = fetch_target_batch(BATCH_SIZE)
 flagged_candidates = []
 
-print(f"\n--- Starting Optimized Batch Execution ({len(targets)} targets) ---")
+print(f"\n--- Starting Batch Execution ({len(targets)} targets) ---")
+
+repo = os.getenv("GITHUB_REPOSITORY", "username/repo")
+branch = os.getenv("GITHUB_REF_NAME", "main")
 
 for idx, target_star in enumerate(targets, 1):
     print(f"[{idx}/{len(targets)}] Processing {target_star}...", end=" ", flush=True)
     
-    # Log target to prevent retries
+    # Log target to prevent re-scanning
     with open(history_file, "a") as f:
         f.write(f"{target_star}\n")
     scanned.add(target_star)
 
     try:
-        # 1. Search official NASA SPOC pipeline products only (MUCH faster)
+        # Search official NASA SPOC pipeline light curves
         search_results = lk.search_lightcurve(target_star, mission="TESS", author="SPOC")
         
         if len(search_results) == 0:
-            print("❌ No official SPOC light curves.")
+            print("❌ No official SPOC data.")
             continue
 
-        # 2. Download ONLY the first available sector to keep downloads lightweight (<5MB)
+        # Download light curve (first sector)
         lc = search_results[0].download(quality_bitmask="hardest").remove_nans().flatten()
         
-        # 3. High-precision BLS periodogram
-        periodogram = lc.to_periodogram(method="bls", period=np.linspace(0.5, 5, 3000))
+        # BLS periodogram search
+        periodogram = lc.to_periodogram(method="bls", period=np.linspace(0.5, 5, 2000))
         best_period = float(periodogram.period_at_max_power.value)
         best_transit_time = float(periodogram.transit_time_at_max_power.value)
         best_duration = float(periodogram.duration_at_max_power.value)
         best_depth = float(periodogram.depth_at_max_power.value)
         
-        # Calculate SNR
+        # Calculate Signal-to-Noise Ratio (SNR)
         std_dev = np.std(lc.flux.value)
         n_points = len(lc.flux.value)
         duty_cycle = best_duration / best_period
@@ -88,8 +96,6 @@ for idx, target_star in enumerate(targets, 1):
             plt.savefig(image_filename)
             plt.close()
             
-            repo = os.getenv("GITHUB_REPOSITORY", "username/repo")
-            branch = os.getenv("GITHUB_REF_NAME", "main")
             raw_image_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{image_filename}"
             
             flagged_candidates.append({
@@ -123,3 +129,6 @@ if flagged_candidates:
         
     with open(report_file, "w") as f:
         f.write(report_text)
+    print("Candidates saved to report.txt.")
+else:
+    print("No high-SNR candidates found in this batch.")
