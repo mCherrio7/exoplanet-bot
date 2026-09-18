@@ -5,24 +5,27 @@ import os
 import random
 from astroquery.mast import Catalogs
 
+BATCH_SIZE = 20
+SNR_THRESHOLD = 8.0
+
 os.makedirs("candidates", exist_ok=True)
 history_file = "scanned_targets.txt"
 report_file = "candidates/report.txt"
 
-# Clean up any leftover report file from previous runs
+# Clean up any previous run's report file
 if os.path.exists(report_file):
     os.remove(report_file)
 
 # 1. Load historical scan log
 if os.path.exists(history_file):
     with open(history_file, "r") as f:
-        scanned = [line.strip() for line in f.readlines()]
+        scanned = set(line.strip() for line in f.readlines())
 else:
-    scanned = []
+    scanned = set()
 
-def get_dynamic_target():
-    """Queries NASA's MAST TIC catalog for bright target stars suitable for BLS searching."""
-    print("Querying MAST catalog for TESS targets...")
+def fetch_target_batch(batch_size):
+    """Fetches a batch of unscanned targets directly from NASA's MAST TIC catalog."""
+    print(f"Querying MAST catalog for upcoming target batch...")
     catalog_data = Catalogs.query_criteria(
         catalog="TIC",
         Tmag=[8.0, 11.5],
@@ -32,33 +35,44 @@ def get_dynamic_target():
     tic_ids = [f"TIC {row['ID']}" for row in catalog_data]
     unscanned = [t for t in tic_ids if t not in scanned]
     
-    if not unscanned:
-        print("No new targets found in query batch. Selecting random fallback from batch.")
-        return random.choice(tic_ids)
-        
-    selected_target = random.choice(unscanned)
-    print(f"Dynamically selected target: {selected_target}")
-    return selected_target
-
-target_star = get_dynamic_target()
-
-try:
-    search_results = lk.search_lightcurve(target_star, mission="TESS")
+    # Shuffle to ensure varied sky coverage
+    random.shuffle(unscanned)
+    selected_batch = unscanned[:batch_size]
     
-    if len(search_results) > 0:
-        # Download and clean light curve
+    print(f"Batch assembled ({len(selected_batch)} targets selected).")
+    return selected_batch
+
+targets = fetch_target_batch(BATCH_SIZE)
+flagged_candidates = []
+
+print(f"\n--- Starting Batch Execution ({len(targets)} targets) ---")
+
+for idx, target_star in enumerate(targets, 1):
+    print(f"\n[{idx}/{len(targets)}] Processing target: {target_star}...")
+    
+    # Always log target to prevent re-scanning
+    with open(history_file, "a") as f:
+        f.write(f"{target_star}\n")
+    scanned.add(target_star)
+
+    try:
+        search_results = lk.search_lightcurve(target_star, mission="TESS")
+        
+        if len(search_results) == 0:
+            print(f"  -> No public TESS light curves found for {target_star}.")
+            continue
+
+        # Download light curve (first sector available)
         lc = search_results[0].download(quality_bitmask="hardest").remove_nans().flatten()
         
-        # Run Box-fitting Least Squares search
-        periodogram = lc.to_periodogram(method="bls", period=np.linspace(0.5, 5, 5000))
+        # Run BLS algorithm
+        periodogram = lc.to_periodogram(method="bls", period=np.linspace(0.5, 5, 3000))
         best_period = float(periodogram.period_at_max_power.value)
         best_transit_time = float(periodogram.transit_time_at_max_power.value)
         best_duration = float(periodogram.duration_at_max_power.value)
         best_depth = float(periodogram.depth_at_max_power.value)
         
         # Calculate Signal-to-Noise Ratio (SNR)
-        # SNR = Transit Depth / Standard Error of the Light Curve
-        # Scaled by square root of total in-transit points
         std_dev = np.std(lc.flux.value)
         n_points = len(lc.flux.value)
         duty_cycle = best_duration / best_period
@@ -69,55 +83,63 @@ try:
         else:
             snr = 0.0
             
-        print(f"Target: {target_star} | Calculated SNR: {snr:.2f} | Threshold: 8.0")
+        print(f"  -> Calculated SNR: {snr:.2f} (Period: {best_period:.4f} d)")
         
-        # Log target as scanned regardless of SNR outcome to avoid re-scanning
-        with open(history_file, "a") as f:
-            f.write(f"{target_star}\n")
+        # Quality Gate Check
+        if snr >= SNR_THRESHOLD:
+            print(f"  🚨 HIGH-CONFIDENCE CANDIDATE FLAGGED! (SNR {snr:.2f} >= {SNR_THRESHOLD})")
             
-        # SNR Quality Gate: Only create candidate report if SNR > 8.0
-        if snr >= 8.0:
-            print(f"High-priority candidate found! (SNR {snr:.2f} >= 8.0)")
+            # Save phase-folded transit plot named by TIC ID
+            clean_name = target_star.replace(" ", "_")
+            image_filename = f"candidates/{clean_name}_transit.png"
             
             folded = lc.fold(period=best_period, epoch_time=best_transit_time)
-            
-            # Save light curve image
             fig, ax = plt.subplots(figsize=(8, 4))
             folded.scatter(ax=ax, s=2)
-            ax.set_title(f"Target: {target_star} - Period: {best_period:.4f} days - SNR: {snr:.2f}")
-            plt.savefig("candidates/candidate_transit.png")
+            ax.set_title(f"{target_star} - P: {best_period:.4f}d - SNR: {snr:.2f}")
+            plt.savefig(image_filename)
             plt.close()
             
-            # Dynamic environment links
+            # Construct raw GitHub image URL
             repo = os.getenv("GITHUB_REPOSITORY", "username/repo")
             branch = os.getenv("GITHUB_REF_NAME", "main")
-            raw_image_url = f"https://raw.githubusercontent.com/{repo}/{branch}/candidates/candidate_transit.png"
+            raw_image_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{image_filename}"
             
-            report_text = f"""## 🚨 High-Priority Candidate Flagged: {target_star}
+            flagged_candidates.append({
+                "target": target_star,
+                "period": best_period,
+                "epoch": best_transit_time,
+                "depth": best_depth,
+                "duration": best_duration,
+                "snr": snr,
+                "image_url": raw_image_url
+            })
 
-**Target Star:** {target_star}
-**Signal-to-Noise Ratio (SNR):** {snr:.2f} (Passed Threshold >= 8.0)
-**Calculated Orbital Period:** {best_period:.4f} days
-**Epoch Time (T0):** {best_transit_time:.4f}
-**Transit Depth:** {best_depth:.5f}
-**Transit Duration:** {best_duration:.4f} days
+    except Exception as e:
+        print(f"  ⚠️ Error processing {target_star}: {str(e)}")
 
-### Phase-Folded Light Curve Plot:
-![Candidate Transit Plot]({raw_image_url})
+print("\n--- Batch Processing Complete ---")
+print(f"Scanned: {len(targets)} stars | Flagged Candidates: {len(flagged_candidates)}")
 
----
-### Candidate Status:
-- TESS public archival data analyzed via BLS.
-- Strong signal detected above background noise threshold.
-- Prepared for follow-up review on Planet Hunters TESS or ExoFOP.
-"""
-            with open(report_file, "w") as f:
-                f.write(report_text)
-        else:
-            print(f"Target {target_star} passed scan, but SNR ({snr:.2f}) was below threshold (8.0). No Issue will be created.")
-
-    else:
-        print(f"No light curves returned for {target_star}.")
-
-except Exception as e:
-    print(f"Pipeline error while analyzing {target_star}: {str(e)}")
+# 2. Write aggregated GitHub Issue report if candidates were found
+if flagged_candidates:
+    report_text = f"## 🪐 Batch Execution Report: {len(flagged_candidates)} Candidate(s) Flagged\n\n"
+    report_text += f"**Batch Size:** {len(targets)} stars scanned\n"
+    report_text += f"**SNR Filter Threshold:** ≥ {SNR_THRESHOLD}\n\n"
+    report_text += "---\n\n"
+    
+    for cand in flagged_candidates:
+        report_text += f"### 🚨 Candidate: {cand['target']}\n"
+        report_text += f"- **Signal-to-Noise Ratio (SNR):** `{cand['snr']:.2f}`\n"
+        report_text += f"- **Orbital Period ($P$):** `{cand['period']:.4f}` days\n"
+        report_text += f"- **Epoch ($T_0$):** `{cand['epoch']:.4f}`\n"
+        report_text += f"- **Transit Depth:** `{cand['depth']:.5f}`\n"
+        report_text += f"- **Transit Duration:** `{cand['duration']:.4f}` days\n\n"
+        report_text += f"![Transit Plot]({cand['image_url']})\n\n"
+        report_text += "---\n\n"
+        
+    with open(report_file, "w") as f:
+        f.write(report_text)
+    print("Candidates written to report.txt.")
+else:
+    print("No high-SNR candidates found in this batch. No report generated.")
