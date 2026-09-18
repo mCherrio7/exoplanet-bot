@@ -6,7 +6,7 @@ import random
 from astroquery.mast import Catalogs
 
 BATCH_SIZE = 20
-SNR_THRESHOLD = 8.0
+SNR_THRESHOLD = 2.0
 
 os.makedirs("candidates", exist_ok=True)
 history_file = "scanned_targets.txt"
