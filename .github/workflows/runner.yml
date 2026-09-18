@@ -34,7 +34,7 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add candidates/candidate_transit.png scanned_targets.txt || true
+          git add candidates/*.png scanned_targets.txt || true
           git commit -m "Automated update: Save candidate artifacts and scan log" || echo "No changes to commit"
           git push
 
@@ -44,8 +44,8 @@ jobs:
         run: |
           if [ -f ./candidates/report.txt ]; then
             gh issue create \
-              --title "🚨 High-Priority Exoplanet Candidate Flagged" \
+              --title "🚨 Exoplanet Candidate Batch Report" \
               --body-file ./candidates/report.txt
           else
-            echo "No high-SNR candidates flagged during this run. Skipping Issue creation."
+            echo "No high-SNR candidates flagged in this batch. Skipping Issue creation."
           fi
