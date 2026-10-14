@@ -5,26 +5,27 @@ import os
 import random
 from astroquery.mast import Catalogs
 
-BATCH_SIZE = 20
-SNR_THRESHOLD = 2.0
+SNR_THRESHOLD = 8.0
+MAX_TRIALS = 100  # Safety limit to avoid infinite loops per workflow run
 
 os.makedirs("candidates", exist_ok=True)
 history_file = "scanned_targets.txt"
 report_file = "candidates/report.txt"
 
-# Clean up leftover report file
+# Clean up any leftover report from previous runs
 if os.path.exists(report_file):
     os.remove(report_file)
 
-# Load historical scan log
+# 1. Load historical scan log
 if os.path.exists(history_file):
     with open(history_file, "r") as f:
         scanned = set(line.strip() for line in f.readlines())
 else:
     scanned = set()
 
-def fetch_target_batch(batch_size):
-    print("Querying MAST catalog for TESS targets...")
+def fetch_unscanned_targets():
+    """Queries NASA's MAST catalog for available TESS stars not yet in history."""
+    print("Querying NASA MAST catalog for candidate targets...")
     try:
         catalog_data = Catalogs.query_criteria(
             catalog="TIC",
@@ -34,36 +35,45 @@ def fetch_target_batch(batch_size):
         tic_ids = [f"TIC {row['ID']}" for row in catalog_data]
         unscanned = [t for t in tic_ids if t not in scanned]
         random.shuffle(unscanned)
-        return unscanned[:batch_size]
+        return unscanned
     except Exception as e:
         print(f"Error querying MAST: {e}")
         return []
 
-targets = fetch_target_batch(BATCH_SIZE)
-flagged_candidates = []
+target_pool = fetch_unscanned_targets()
 
-print(f"\n--- Starting Batch Execution ({len(targets)} targets) ---")
+if not target_pool:
+    print("No unscanned targets available in query pool.")
+    exit(0)
 
 repo = os.getenv("GITHUB_REPOSITORY", "username/repo")
 branch = os.getenv("GITHUB_REF_NAME", "main")
 
-for idx, target_star in enumerate(targets, 1):
-    print(f"[{idx}/{len(targets)}] Processing {target_star}...", end=" ", flush=True)
+trials = 0
+found_candidate = False
+
+print(f"\n--- Searching until SNR >= {SNR_THRESHOLD} (Max Trials: {MAX_TRIALS}) ---")
+
+while target_pool and trials < MAX_TRIALS and not found_candidate:
+    trials += 1
+    target_star = target_pool.pop()
     
-    # Log target to prevent re-scanning
+    print(f"[Trial {trials}/{MAX_TRIALS}] Scanning {target_star}...", end=" ", flush=True)
+    
+    # Immediately log to history so target is never re-scanned
     with open(history_file, "a") as f:
         f.write(f"{target_star}\n")
     scanned.add(target_star)
 
     try:
-        # Search official NASA SPOC pipeline light curves
+        # Fetch official SPOC light curves
         search_results = lk.search_lightcurve(target_star, mission="TESS", author="SPOC")
         
         if len(search_results) == 0:
-            print("❌ No official SPOC data.")
+            print("❌ No SPOC light curves available.")
             continue
 
-        # Download light curve (first sector)
+        # Download first sector
         lc = search_results[0].download(quality_bitmask="hardest").remove_nans().flatten()
         
         # BLS periodogram search
@@ -82,9 +92,10 @@ for idx, target_star in enumerate(targets, 1):
         snr = (best_depth / std_dev) * np.sqrt(in_transit_points) if (std_dev > 0 and in_transit_points > 0) else 0.0
         print(f"Done. (SNR: {snr:.2f} | P: {best_period:.4f}d)")
         
-        # Quality Filter
+        # Check if quality gate is met
         if snr >= SNR_THRESHOLD:
-            print(f"  🚨 HIGH-CONFIDENCE CANDIDATE FLAGGED! ({target_star})")
+            print(f"\n🎉 HIGH-CONFIDENCE CANDIDATE FOUND on trial {trials}! ({target_star})")
+            found_candidate = True
             
             clean_name = target_star.replace(" ", "_")
             image_filename = f"candidates/{clean_name}_transit.png"
@@ -98,37 +109,34 @@ for idx, target_star in enumerate(targets, 1):
             
             raw_image_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{image_filename}"
             
-            flagged_candidates.append({
-                "target": target_star,
-                "period": best_period,
-                "epoch": best_transit_time,
-                "depth": best_depth,
-                "duration": best_duration,
-                "snr": snr,
-                "image_url": raw_image_url
-            })
+            report_text = f"""## 🚨 High-Priority Exoplanet Candidate Flagged
 
+**Target Star:** `{target_star}`
+**Signal-to-Noise Ratio (SNR):** `{snr:.2f}` (Threshold: ≥ {SNR_THRESHOLD})
+**Calculated Orbital Period ($P$):** `{best_period:.4f}` days
+**Epoch ($T_0$):** `{best_transit_time:.4f}`
+**Transit Depth:** `{best_depth:.5f}`
+**Transit Duration:** `{best_duration:.4f}` days
+**Scanned Sequence Trial:** #{trials}
+
+### Phase-Folded Light Curve Plot:
+![Candidate Transit Plot]({raw_image_url})
+
+---
+### Diagnostics:
+- Identified after evaluating {trials} target stars in sequence.
+- Target logged in `scanned_targets.txt`.
+- Ready for manual follow-up verification on Planet Hunters TESS / ExoFOP.
+"""
+            with open(report_file, "w") as f:
+                f.write(report_text)
+                
     except Exception as e:
         print(f"⚠️ Error: {str(e)}")
 
-print("\n--- Batch Processing Complete ---")
-
-# Save Issue report if candidates found
-if flagged_candidates:
-    report_text = f"## 🪐 Batch Execution Report: {len(flagged_candidates)} Candidate(s) Flagged\n\n"
-    report_text += f"**Batch Size:** {len(targets)} stars scanned\n"
-    report_text += f"**SNR Filter Threshold:** ≥ {SNR_THRESHOLD}\n\n---\n\n"
-    
-    for cand in flagged_candidates:
-        report_text += f"### 🚨 Candidate: {cand['target']}\n"
-        report_text += f"- **Signal-to-Noise Ratio (SNR):** `{cand['snr']:.2f}`\n"
-        report_text += f"- **Orbital Period ($P$):** `{cand['period']:.4f}` days\n"
-        report_text += f"- **Epoch ($T_0$):** `{cand['epoch']:.4f}`\n"
-        report_text += f"- **Transit Depth:** `{cand['depth']:.5f}`\n\n"
-        report_text += f"![Transit Plot]({cand['image_url']})\n\n---\n\n"
-        
-    with open(report_file, "w") as f:
-        f.write(report_text)
-    print("Candidates saved to report.txt.")
+print("\n--- Pipeline Execution Summary ---")
+print(f"Total targets scanned in run: {trials}")
+if found_candidate:
+    print("Status: Candidate found and report.txt written.")
 else:
-    print("No high-SNR candidates found in this batch.")
+    print(f"Status: No target met SNR >= {SNR_THRESHOLD} within {MAX_TRIALS} trials.")
